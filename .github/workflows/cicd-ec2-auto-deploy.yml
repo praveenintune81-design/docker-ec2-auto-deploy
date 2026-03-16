@@ -1,0 +1,149 @@
+name: CI/CD EC2 Auto Deploy
+
+# Manual trigger from GitHub Actions UI
+on:
+  workflow_dispatch:
+
+jobs:
+
+# -----------------------------
+# Stage 1 - Checkout Code
+# -----------------------------
+
+  checkout:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        # This step downloads the repository code
+        # from GitHub to the runner machine
+
+
+# -----------------------------
+# Stage 2 - Install Dependencies
+# -----------------------------
+
+  install:
+
+    runs-on: ubuntu-latest
+
+    needs: checkout
+
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup NodeJS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+        # Installs Node.js runtime environment
+
+      - name: Install Dependencies
+        run: |
+          cd app
+          npm install
+        # Installs required Node.js libraries
+
+
+# -----------------------------
+# Stage 3 - Run Application Test
+# -----------------------------
+
+  test:
+
+    runs-on: ubuntu-latest
+
+    needs: install
+
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Start Application
+        run: |
+          cd app
+          npm install
+          node app.js &
+          sleep 5
+        # Starts application in background
+
+      - name: Test Endpoint
+        run: |
+          curl http://localhost:3000
+        # Sends HTTP request to verify application works
+
+
+# -----------------------------
+# Stage 4 - Build and Push Docker Image
+# -----------------------------
+
+  docker-build-push:
+
+    runs-on: ubuntu-latest
+
+    needs: test
+
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        # Downloads source code
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+        # Authenticates runner with DockerHub registry
+
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/cicd-ec2-app:latest .
+        # Builds Docker image using Dockerfile
+
+      - name: Push Docker Image
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/cicd-ec2-app:latest
+        # Uploads image to DockerHub repository
+
+
+# -----------------------------
+# Stage 5 - Deploy to EC2 Server
+# -----------------------------
+
+  deploy:
+
+    runs-on: ubuntu-latest
+
+    needs: docker-build-push
+
+    steps:
+
+      - name: Deploy Application on EC2
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+
+          script: |
+
+            docker pull ${{ secrets.DOCKER_USERNAME }}/cicd-ec2-app:latest
+
+            docker stop cicd-ec2-app || true
+            docker rm cicd-ec2-app || true
+
+            docker run -d -p 3000:3000 \
+            --name cicd-ec2-app \
+            ${{ secrets.DOCKER_USERNAME }}/cicd-ec2-app:latest
+
+        # Connects to EC2 server via SSH
+        # Pulls latest image from DockerHub
+        # Stops old container
+        # Starts new container
